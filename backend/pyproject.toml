@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "platform-control-plane"
+version = "0.1.0"
+description = "Control plane: tenant/application admin API, onboarding, policy workflow, usage"
+authors = []
+readme = "README.md"
+packages = [{ include = "services" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+fastapi = ">=0.115,<1.0"
+# Same floor as bedrock-runtime-gateway's own pyproject.toml -- fastapi
+# only requires starlette>=0.46.0 (no upper bound), which let a plain
+# `poetry lock` land on a version with 5 real CVEs there. See that
+# repo's pyproject.toml comment for the details.
+starlette = ">=1.6.0,<2.0"
+pydantic = ">=2.0,<3.0"
+uvicorn = ">=0.38,<1.0"
+boto3 = ">=1.34,<2.0"
+pyjwt = { version = ">=2.8,<3.0", extras = ["crypto"] }
+pyyaml = ">=6.0,<7.0"
+opentelemetry-api = ">=1.20,<2.0"
+opentelemetry-sdk = ">=1.20,<2.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.20,<2.0"
+
+[tool.poetry.group.dev.dependencies]
+httpx = ">=0.28,<1.0"
+pytest = ">=9.0.3,<10.0"
+# Real DynamoDB emulation, not a hand-rolled call-recording fake --
+# same reasoning as bedrock-runtime-gateway's own copy of this
+# dependency: several stores here (DynamoDbPolicyStore,
+# DynamoDbOnboardingStore, DynamoDbPolicyChangeStore, ...) exist
+# specifically to get DynamoDB's conditional-write/transaction
+# semantics right.
+moto = { version = ">=5.0,<6.0", extras = ["dynamodb"] }
+
+[build-system]
+requires = ["poetry-core>=2.0,<3.0"]
+build-backend = "poetry.core.masonry.api"

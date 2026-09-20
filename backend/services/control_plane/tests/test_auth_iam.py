@@ -1,0 +1,577 @@
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+from starlette.testclient import TestClient
+
+from .. import auth_pipeline as pipeline
+from ..auth.aws_iam import HEADER_ACCOUNT_ID, HEADER_PRINCIPAL_ARN, FileIamTenantResolver, IamPrincipalGrant
+from ..auth.identity import AuthError
+from .auth_fixtures import get_auth_fixture
+
+_KNOWN_ARN = "arn:aws:iam::646821141010:role/team-a-ai-client"
+_KNOWN_ASSUMED_ROLE_ARN = "arn:aws:sts::646821141010:assumed-role/team-a-ai-client/some-session"
+_UNKNOWN_ARN = "arn:aws:iam::646821141010:role/nobody-maps-this"
+
+
+class _FakeIamTenantResolver:
+    """In-memory stand-in for FileIamTenantResolver -- no filesystem I/O,
+    same Protocol (`resolve(principal_arn) -> IamPrincipalGrant`)."""
+
+    def __init__(self, grants: dict):
+        self._grants = grants
+
+    def resolve(self, principal_arn: str, *, request_id=None, session_id=None) -> IamPrincipalGrant:
+        grant = self._grants.get(principal_arn)
+        if grant is None:
+            raise AuthError(
+                f"no tenant mapping for IAM principal '{principal_arn}'", code="UNKNOWN_IAM_PRINCIPAL"
+            )
+        return grant
+
+
+def _resolver() -> _FakeIamTenantResolver:
+    grant = IamPrincipalGrant(tenant_id="team-a", application_id="team-a-ai-client", roles=["developer"])
+    return _FakeIamTenantResolver({_KNOWN_ARN: grant})
+
+
+class AuthenticateIamUnitTests(unittest.TestCase):
+    """Direct pipeline.authenticate_iam()/authenticate() tests -- no HTTP,
+    no AWS, mirrors the resolve_policy()-style unit tests in test_policy.py."""
+
+    def test_known_principal_resolves_to_identity(self):
+        identity = pipeline.authenticate_iam(
+            _KNOWN_ARN, "646821141010", iam_tenant_resolver=_resolver()
+        )
+
+        self.assertEqual(identity.sub, _KNOWN_ARN)
+        self.assertEqual(identity.tenant_id, "team-a")
+        self.assertEqual(identity.application_id, "team-a-ai-client")
+        self.assertEqual(identity.roles, ["developer"])
+        self.assertEqual(identity.auth_type, "aws_iam")
+        self.assertEqual(identity.account_id, "646821141010")
+
+    def test_unknown_principal_is_403(self):
+        with self.assertRaises(pipeline.PipelineError) as ctx:
+            pipeline.authenticate_iam(_UNKNOWN_ARN, "646821141010", iam_tenant_resolver=_resolver())
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.code, "UNKNOWN_IAM_PRINCIPAL")
+
+    def test_authenticate_dispatches_to_iam_path_when_principal_arn_present(self):
+        # No bearer token at all -- iam_principal_arn alone must be enough,
+        # proving the IAM branch is checked before the JWT branch.
+        identity = pipeline.authenticate(
+            None,
+            token_verifier=get_auth_fixture().verifier,
+            iam_principal_arn=_KNOWN_ARN,
+            iam_account_id="646821141010",
+            iam_tenant_resolver=_resolver(),
+        )
+
+        self.assertEqual(identity.auth_type, "aws_iam")
+        self.assertEqual(identity.tenant_id, "team-a")
+
+    def test_authenticate_falls_back_to_jwt_when_no_principal_arn(self):
+        fixture = get_auth_fixture()
+        token = fixture.token(tenant_id="finance")
+
+        identity = pipeline.authenticate(
+            f"Bearer {token}", token_verifier=fixture.verifier, iam_tenant_resolver=_resolver()
+        )
+
+        self.assertEqual(identity.auth_type, "jwt")
+        self.assertEqual(identity.tenant_id, "finance")
+
+    def test_iam_principal_arn_without_resolver_configured_is_500(self):
+        with self.assertRaises(pipeline.PipelineError) as ctx:
+            pipeline.authenticate(
+                None, token_verifier=get_auth_fixture().verifier, iam_principal_arn=_KNOWN_ARN
+            )
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(ctx.exception.code, "IAM_AUTH_NOT_CONFIGURED")
+
+
+class FileIamTenantResolverTests(unittest.TestCase):
+    """Tests the real YAML-file-backed resolver (policies/iam_tenants.yaml's
+    actual implementation), separate from the in-memory fake used above."""
+
+    def _write(self, contents: str) -> str:
+        tmpdir = tempfile.mkdtemp()
+        path = Path(tmpdir) / "iam_tenants.yaml"
+        path.write_text(textwrap.dedent(contents))
+        return str(path)
+
+    def test_exact_match(self):
+        path = self._write(
+            """
+            iam_principals:
+              "arn:aws:iam::646821141010:role/team-a-ai-client":
+                tenant_id: team-a
+                application_id: team-a-ai-client
+                roles: [developer]
+            """
+        )
+        resolver = FileIamTenantResolver(path)
+
+        grant = resolver.resolve(_KNOWN_ARN)
+
+        self.assertEqual(grant.tenant_id, "team-a")
+        self.assertEqual(grant.application_id, "team-a-ai-client")
+        self.assertEqual(grant.roles, ["developer"])
+
+    def test_wildcard_suffix_match_for_assumed_role_session_names(self):
+        path = self._write(
+            """
+            iam_principals:
+              "arn:aws:sts::646821141010:assumed-role/team-a-ai-client/*":
+                tenant_id: team-a
+                application_id: team-a-ai-client
+                roles: [developer]
+            """
+        )
+        resolver = FileIamTenantResolver(path)
+
+        # Two different session names both match the same wildcard entry.
+        grant_a = resolver.resolve("arn:aws:sts::646821141010:assumed-role/team-a-ai-client/session-a")
+        grant_b = resolver.resolve("arn:aws:sts::646821141010:assumed-role/team-a-ai-client/session-b")
+
+        self.assertEqual(grant_a.tenant_id, "team-a")
+        self.assertEqual(grant_b.tenant_id, "team-a")
+
+    def test_exact_match_takes_precedence_over_wildcard(self):
+        path = self._write(
+            """
+            iam_principals:
+              "arn:aws:sts::646821141010:assumed-role/team-a-ai-client/*":
+                tenant_id: team-a
+                application_id: team-a-ai-client
+                roles: [developer]
+              "arn:aws:sts::646821141010:assumed-role/team-a-ai-client/pinned-session":
+                tenant_id: team-a-pinned
+                application_id: team-a-ai-client
+                roles: [developer]
+            """
+        )
+        resolver = FileIamTenantResolver(path)
+
+        grant = resolver.resolve("arn:aws:sts::646821141010:assumed-role/team-a-ai-client/pinned-session")
+
+        self.assertEqual(grant.tenant_id, "team-a-pinned")
+
+    def test_unknown_principal_raises_auth_error(self):
+        path = self._write(
+            """
+            iam_principals:
+              "arn:aws:iam::646821141010:role/team-a-ai-client":
+                tenant_id: team-a
+                application_id: team-a-ai-client
+                roles: [developer]
+            """
+        )
+        resolver = FileIamTenantResolver(path)
+
+        with self.assertRaises(AuthError) as ctx:
+            resolver.resolve(_UNKNOWN_ARN)
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_IAM_PRINCIPAL")
+
+    def test_missing_file_is_tolerated_as_empty_mapping(self):
+        resolver = FileIamTenantResolver("/nonexistent/path/iam_tenants.yaml")
+
+        with self.assertRaises(AuthError):
+            resolver.resolve(_KNOWN_ARN)
+
+
+# ChatEndpointIamAuthTests (full-stack /v1/chat dispatch test) removed
+# here -- /v1/chat is a bedrock-runtime-gateway-only route, not part
+# of this service. AuthenticateIamUnitTests and FileIamTenantResolverTests
+# above already cover the same principal->tenant mapping logic at the
+# unit level, which is what this service actually depends on.
+
+
+class HttpIamTenantResolverTests(unittest.TestCase):
+    """M12: HttpIamTenantResolver delegates to platform-authz-service's
+    POST /v1/authorize -- these mock the HTTP layer (urllib), not a
+    real service, since that's platform-authz-service's own test suite's
+    job."""
+
+    def _fake_urlopen(self, response_body: bytes):
+        import io
+        from unittest.mock import patch
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(response_body)
+
+            def __exit__(self_, *args):
+                return False
+
+        return patch("urllib.request.urlopen", return_value=_Resp())
+
+    def test_allow_response_resolves_to_grant(self):
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        body = (
+            b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+            b'"roles":["developer"],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+        )
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with self._fake_urlopen(body):
+            grant = resolver.resolve("arn:aws:iam::123:role/x")
+
+        self.assertEqual(grant.tenant_id, "search")
+        self.assertEqual(grant.application_id, "search-dev")
+        self.assertEqual(grant.roles, ["developer"])
+
+    def test_deny_response_raises_unknown_principal(self):
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        body = (
+            b'{"decision":"DENY","tenant_id":null,"application_id":null,'
+            b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"no tenant mapping"}'
+        )
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with self._fake_urlopen(body):
+            with self.assertRaises(AuthError) as ctx:
+                resolver.resolve("arn:aws:iam::123:role/nobody")
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_IAM_PRINCIPAL")
+
+    def test_unreachable_service_raises_service_unavailable(self):
+        import urllib.error
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
+            with self.assertRaises(AuthError) as ctx:
+                resolver.resolve("arn:aws:iam::123:role/x")
+
+        self.assertEqual(ctx.exception.code, "AUTHORIZATION_SERVICE_UNAVAILABLE")
+
+    def test_forwards_request_id_as_header(self):
+        import io
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+                    b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.resolve("arn:aws:iam::123:role/x", request_id="req-abc-123")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertEqual(sent_request.get_header("X-request-id"), "req-abc-123")
+
+    def test_omits_header_when_no_request_id_given(self):
+        import io
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+                    b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.resolve("arn:aws:iam::123:role/x")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertIsNone(sent_request.get_header("X-request-id"))
+
+    def test_ca_cert_pem_builds_a_pinned_ssl_context(self):
+        """authz-service's ALB cert is issued by a private CA no public
+        trust store knows about -- ca_cert_pem pins verification to
+        exactly that CA instead of relying on the system default (see
+        bedrock-gateway-infra's aws_acmpca_certificate_authority)."""
+        import ssl
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        sentinel_context = object()
+        with patch("ssl.create_default_context", return_value=sentinel_context) as mock_create:
+            resolver = HttpIamTenantResolver(base_url="https://authz.internal", ca_cert_pem="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----")
+
+        mock_create.assert_called_once_with(cadata="-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----")
+        self.assertIs(resolver._ssl_context, sentinel_context)
+
+    def test_no_ca_cert_pem_means_no_pinned_context(self):
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        self.assertIsNone(resolver._ssl_context)
+
+    def test_pinned_context_is_passed_to_urlopen(self):
+        import io
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+                    b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        sentinel_context = object()
+        with patch("ssl.create_default_context", return_value=sentinel_context):
+            resolver = HttpIamTenantResolver(base_url="https://authz.internal", ca_cert_pem="fake-pem")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.resolve("arn:aws:iam::123:role/x")
+
+        self.assertIs(mock_urlopen.call_args.kwargs["context"], sentinel_context)
+
+    def test_injects_w3c_traceparent(self):
+        """Lets authz-service's own span be a child of this request's
+        trace instead of an unrelated one -- see aws.iam.py's use of
+        opentelemetry.propagate.inject()."""
+        import io
+        from unittest.mock import patch
+
+        from ..auth import aws_iam as aws_iam_module
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+                    b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            with patch.object(aws_iam_module, "inject") as mock_inject:
+                resolver.resolve("arn:aws:iam::123:role/x")
+
+        mock_inject.assert_called_once()
+        # inject() was handed the actual headers dict being built for
+        # this request (content-type already in it), not some
+        # unrelated/empty dict -- confirms it runs in the right place,
+        # before the request is sent.
+        (injected_carrier,), _ = mock_inject.call_args
+        self.assertIn("content-type", injected_carrier)
+
+    def test_forwards_session_id_as_header(self):
+        import io
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+                    b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.resolve("arn:aws:iam::123:role/x", session_id="sess-xyz-789")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertEqual(sent_request.get_header("X-session-id"), "sess-xyz-789")
+
+    def test_omits_session_id_header_when_not_given(self):
+        import io
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+                    b'"roles":[],"policy_id":"iam-principal-mapping-v1","reason":"principal is mapped"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.resolve("arn:aws:iam::123:role/x")
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertIsNone(sent_request.get_header("X-session-id"))
+
+
+class HttpIamTenantResolverCheckResourceAccessTests(unittest.TestCase):
+    """Plan section 35.16: the resource/context-aware second call to
+    /v1/authorize, made after model resolution -- distinct from
+    resolve()'s identity-only call. Same mocked-HTTP-layer approach as
+    HttpIamTenantResolverTests above."""
+
+    def _fake_urlopen(self, response_body: bytes):
+        import io
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(response_body)
+
+            def __exit__(self_, *args):
+                return False
+
+        from unittest.mock import patch
+
+        return patch("urllib.request.urlopen", return_value=_Resp())
+
+    def test_allow_response(self):
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        body = (
+            b'{"decision":"ALLOW","tenant_id":"search","application_id":"search-dev",'
+            b'"roles":["developer"],"policy_id":"default-allow-known-principal-v1",'
+            b'"policy_version":1,"reason":"no matching rule -- default allow for a known principal"}'
+        )
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with self._fake_urlopen(body):
+            decision = resolver.check_resource_access(
+                "arn:aws:iam::123:role/x", action="llm.invoke", resource_id="us.amazon.nova-micro-v1:0",
+            )
+
+        self.assertTrue(decision.allow)
+        self.assertEqual(decision.policy_id, "default-allow-known-principal-v1")
+        self.assertEqual(decision.policy_version, 1)
+
+    def test_deny_response_does_not_raise(self):
+        """Unlike resolve() (a DENY there means "unknown principal", a
+        genuine AuthError), a resource-level DENY is an ordinary,
+        expected decision -- the caller (pipeline.
+        enforce_resource_authorization) is what turns it into a
+        PipelineError, not this method."""
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        body = (
+            b'{"decision":"DENY","tenant_id":"finance","application_id":"finance-app",'
+            b'"roles":["developer"],"policy_id":"deny-deprecated-model-deepseek-r1",'
+            b'"policy_version":1,"reason":"matched rule \'deny-deprecated-model-deepseek-r1\' (priority 100)"}'
+        )
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with self._fake_urlopen(body):
+            decision = resolver.check_resource_access(
+                "arn:aws:iam::123:role/x", action="llm.invoke", resource_id="us.deepseek.r1-v1:0",
+            )
+
+        self.assertFalse(decision.allow)
+        self.assertEqual(decision.policy_id, "deny-deprecated-model-deepseek-r1")
+        self.assertIn("deny-deprecated-model-deepseek-r1", decision.reason)
+
+    def test_sends_resource_and_context_on_the_wire(self):
+        import io
+        import json
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"t","application_id":"a","roles":[],'
+                    b'"policy_id":"default-allow-known-principal-v1","policy_version":1,"reason":"r"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.check_resource_access(
+                "arn:aws:iam::123:role/x", action="llm.invoke", resource_id="us.amazon.nova-micro-v1:0",
+                context={"data_classification": "phi"},
+            )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        sent_body = json.loads(sent_request.data)
+        self.assertEqual(sent_body["resource"], {"type": "model", "id": "us.amazon.nova-micro-v1:0"})
+        self.assertEqual(sent_body["context"], {"data_classification": "phi"})
+        self.assertEqual(sent_body["action"], "llm.invoke")
+
+    def test_no_context_defaults_to_empty_dict_on_the_wire(self):
+        import io
+        import json
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        class _Resp:
+            def __enter__(self_):
+                return io.BytesIO(
+                    b'{"decision":"ALLOW","tenant_id":"t","application_id":"a","roles":[],'
+                    b'"policy_id":"default-allow-known-principal-v1","policy_version":1,"reason":"r"}'
+                )
+
+            def __exit__(self_, *args):
+                return False
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", return_value=_Resp()) as mock_urlopen:
+            resolver.check_resource_access(
+                "arn:aws:iam::123:role/x", action="llm.invoke", resource_id="m",
+            )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        sent_body = json.loads(sent_request.data)
+        self.assertEqual(sent_body["context"], {})
+
+    def test_unreachable_service_raises_service_unavailable(self):
+        import urllib.error
+        from unittest.mock import patch
+
+        from ..auth.aws_iam import HttpIamTenantResolver
+
+        resolver = HttpIamTenantResolver(base_url="http://authz.internal:8080")
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
+            with self.assertRaises(AuthError) as ctx:
+                resolver.check_resource_access("arn:aws:iam::123:role/x", action="llm.invoke", resource_id="m")
+
+        self.assertEqual(ctx.exception.code, "AUTHORIZATION_SERVICE_UNAVAILABLE")
+
+
+if __name__ == "__main__":
+    unittest.main()

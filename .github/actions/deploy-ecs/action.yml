@@ -1,0 +1,79 @@
+name: Deploy to ECS
+description: >
+  Build a service's image, push it to ECR tagged with the commit SHA,
+  and roll it out to the given ECS service by registering a new task
+  definition revision. Adapted from platform-authz-service's action of
+  the same name -- generalized with working-directory/container-name
+  inputs since this repo builds two separate deployables (backend/,
+  portal/) from one checkout, unlike every other repo this pattern was
+  copied from.
+
+inputs:
+  aws-region:
+    required: true
+  deploy-role-arn:
+    description: IAM role this job assumes via GitHub OIDC, defined in bedrock-runtime-gateway's environments/global.
+    required: true
+  ecr-repository:
+    required: true
+  ecs-cluster:
+    required: true
+  ecs-service:
+    required: true
+  task-definition-family:
+    required: true
+  container-name:
+    description: Name of the container within the task definition to update the image for.
+    required: true
+  working-directory:
+    description: Subdirectory containing this deployable's own Dockerfile (backend/ or portal/).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.deploy-role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - id: ecr-login
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and push image
+      id: build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        ECR_REPOSITORY: ${{ inputs.ecr-repository }}
+        IMAGE_TAG: sha-${{ github.sha }}
+      run: |
+        docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
+        docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+    - name: Download current task definition
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.task-definition-family }}
+      run: |
+        aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition \
+          | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+          > task-definition.json
+
+    - name: Render new image into task definition
+      id: render
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json
+        container-name: ${{ inputs.container-name }}
+        image: ${{ steps.build.outputs.image }}
+
+    - name: Deploy task definition to ECS
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      with:
+        task-definition: ${{ steps.render.outputs.task-definition }}
+        service: ${{ inputs.ecs-service }}
+        cluster: ${{ inputs.ecs-cluster }}
+        wait-for-service-stability: true

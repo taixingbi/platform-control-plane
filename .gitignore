@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.dev/
+poetry.lock.bak
+.DS_Store
+
+# portal (Next.js), once migrated in
+portal/node_modules/
+portal/.next/

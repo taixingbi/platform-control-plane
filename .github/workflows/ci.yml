@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# This repo builds two separate deployables from one checkout
+# (backend/, portal/) -- every job below is scoped to backend/ via
+# working-directory; the portal's own CI lands alongside it once that
+# migration happens.
+
+jobs:
+  test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install 'poetry==2.1.4'
+          poetry install --with dev
+
+      - name: Run unit tests
+        run: poetry run python -m unittest discover -s services/control_plane/tests -t .
+
+  docker:
+    name: Backend Docker build + smoke test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t control-plane:ci .
+
+      - name: Run container
+        run: docker run -d --name control-plane-ci -p 8080:8080 control-plane:ci
+
+      - name: Wait for /healthz
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:8080/healthz; then
+              echo "control-plane is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "control-plane did not become healthy in time"
+          exit 1
+
+      - name: Container logs (always, for debugging)
+        if: always()
+        run: docker logs control-plane-ci
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f control-plane-ci
+
+  # Plan section 35.9 (P2 production hardening) -- same reasoning and
+  # the same actions:read live-verified fix as every other Python repo
+  # in this platform's copy of this job: NOT in deploy-dev's `needs:`,
+  # findings land in the Security tab.
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+      - uses: github/codeql-action/analyze@v3
+
+  pip-audit:
+    name: Dependency scan (pip-audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install 'poetry==2.1.4'
+          poetry self add poetry-plugin-export
+          poetry install --with dev
+      - name: Export requirements from poetry.lock
+        run: poetry export --with dev -f requirements.txt -o requirements-audit.txt --without-hashes
+      - name: pip-audit
+        run: pip install pip-audit && pip-audit -r requirements-audit.txt --desc
+
+  trivy:
+    name: Backend container scan (Trivy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t control-plane:trivy-scan .
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: control-plane:trivy-scan
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: backend/trivy-results.sarif
+
+  deploy-dev:
+    name: Deploy backend to dev
+    needs: [test, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/deploy-ecs
+        with:
+          aws-region: us-east-1
+          deploy-role-arn: ${{ vars.AWS_CONTROL_PLANE_DEPLOY_ROLE_ARN_DEV }}
+          ecr-repository: gateway-dev-control-plane
+          ecs-cluster: gateway-dev-control-plane-cluster
+          ecs-service: gateway-dev-control-plane-service
+          task-definition-family: gateway-dev-control-plane
+          container-name: control-plane
+          working-directory: backend
