@@ -15,7 +15,7 @@ for why.
 
 ```
 backend/    FastAPI admin API -- services/control_plane/
-portal/     Next.js admin UI (migration pending)
+portal/     Next.js admin UI
 ```
 
 ## Backend
@@ -66,11 +66,32 @@ since it never runs an inference request itself.
 
 ## Portal
 
-Not yet migrated -- still lives in `bedrock-gateway-portal` pending
-that move. Will land in `portal/` here, repointed at this backend's own
-ALB instead of the data-plane gateway's admin routes (which are being
-removed from `bedrock-runtime-gateway` as part of this same
-restructuring).
+Migrated from `bedrock-gateway-portal` (that repo is being retired
+once this one's deploy is live and verified -- not deleted yet).
+
+```bash
+cd portal
+npm install
+npm run build   # or `npm run dev` for local development
+```
+
+`GATEWAY_API_URL`'s route paths (`/v1/admin/*`) didn't change in this
+migration -- only which service answers them did (this repo's own
+`backend/`, not `bedrock-gateway-app` anymore); the portal's own code
+needed zero route changes.
+
+Also upgraded Next.js 14.2.35 -> 16.3.5 as part of this migration --
+`npm audit` on the original repo showed a critical RCE plus several
+other real CVEs, none previously caught (nobody had run `npm audit` on
+it before). Along with `postcss` 8.4.39 -> 8.5.28 (a second real high-
+severity fix, pulled in by the same audit), this repo now audits
+clean at 0 vulnerabilities. The Next.js major bump required migrating
+every `cookies()` call site to Next 15+'s async API (`next/headers`'s
+`cookies()` returns a `Promise` now) -- `lib/session.ts`,
+`app/api/auth/{login,callback}/route.ts`, `app/login/actions.ts`.
+Verified with `tsc --noEmit`, a full `next build`, and a live Docker
+container smoke test (not just a clean compile) before treating this
+as done.
 
 ## Infra
 

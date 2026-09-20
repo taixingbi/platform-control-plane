@@ -8,3 +8,4 @@ poetry.lock.bak
 # portal (Next.js), once migrated in
 portal/node_modules/
 portal/.next/
+portal/tsconfig.tsbuildinfo
