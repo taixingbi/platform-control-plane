@@ -112,9 +112,6 @@ jobs:
   trivy:
     name: Backend container scan (Trivy)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     permissions:
       security-events: write
       contents: read
@@ -122,12 +119,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
+        working-directory: backend
         run: docker build -t control-plane:trivy-scan .
+      # No `defaults.run.working-directory` on this job -- it only
+      # applies to `run:` shell steps, not to a `uses:` action's own
+      # input interpretation. trivy-action's `output:` and
+      # upload-sarif's `sarif_file:` below are both explicit,
+      # repo-root-relative paths instead, so they agree regardless
+      # (live-caught: output: trivy-results.sarif alone wrote to repo
+      # root even with a job-level backend/ default set, and
+      # upload-sarif's backend/-prefixed sarif_file then couldn't find
+      # it there).
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: control-plane:trivy-scan
           format: sarif
-          output: trivy-results.sarif
+          output: backend/trivy-results.sarif
           severity: CRITICAL,HIGH
       - uses: github/codeql-action/upload-sarif@v3
         with:
