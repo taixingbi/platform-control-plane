@@ -17,14 +17,15 @@ locals {
 }
 
 # --- Cross-repo lookups (Phase 1 of the platform restructuring:
-# portal/cognito infra ownership moves here from
-# bedrock-runtime-gateway-infra, WITHOUT touching any live resource --
-# same state-mv/push playbook already used for authz-service) --------
+# portal/cognito infra ownership moves here from bedrock-runtime-gateway
+# (its infra/ half, when this was written, was still its own repo --
+# now merged), WITHOUT touching any live resource -- same
+# state-mv/push playbook already used for authz-service) --------
 #
 # Deliberately loose coupling, same convention every other cross-repo
 # lookup in this platform already uses: name-based data source
 # lookups, not `terraform_remote_state`, not resource duplication.
-# bedrock-runtime-gateway-infra keeps owning the VPC itself (until
+# bedrock-runtime-gateway keeps owning the VPC itself (until
 # platform-foundation exists); this repo only ever reads it.
 
 data "aws_lb" "gateway" {
@@ -43,7 +44,7 @@ data "aws_subnets" "private" {
 }
 
 module "ecr_portal" {
-  source = "git::https://github.com/taixingbi/bedrock-runtime-gateway-infra.git//modules/ecr?ref=main"
+  source = "git::https://github.com/taixingbi/bedrock-runtime-gateway.git//infra/modules/ecr?ref=main"
 
   repository_name = "${local.name_prefix}-portal"
   environment     = "dev"
@@ -58,7 +59,7 @@ module "portal_service" {
   vpc_id             = data.aws_lb.gateway.vpc_id
   private_subnet_ids = data.aws_subnets.private.ids
   # Real, already-live log group -- kept byte-for-byte identical to
-  # what bedrock-runtime-gateway-infra used. aws_cloudwatch_log_group's
+  # what bedrock-runtime-gateway used. aws_cloudwatch_log_group's
   # name forces replacement if changed (loses log history), so this is
   # NOT renamed to match this repo, same reasoning platform-edge-gateway's
   # own log_group_name was deliberately left alone during the repo
