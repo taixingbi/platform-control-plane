@@ -141,9 +141,11 @@ data "aws_iam_policy_document" "control_plane_infra_apply" {
     actions   = ["dynamodb:Describe*", "dynamodb:ListTagsOfResource"]
     resources = ["*"]
   }
-  # IAM role names ARE predictable, scoped by name -- covers both the
-  # portal's roles (gateway-*-portal-*) and the backend's
-  # (gateway-*-control-plane-*).
+  # IAM role names ARE predictable, scoped by name -- covers the
+  # portal's roles (gateway-*-portal-*), the backend's
+  # (gateway-*-control-plane-*), and (Terraform-ownership migration
+  # follow-up) this repo's OWN CI roles (gha-control-plane-*, managed
+  # by this same ci_identity root -- including itself).
   statement {
     sid = "ManagePortalRoles"
     actions = [
@@ -155,6 +157,7 @@ data "aws_iam_policy_document" "control_plane_infra_apply" {
     resources = [
       "arn:aws:iam::${local.account_id}:role/gateway-*-portal-*",
       "arn:aws:iam::${local.account_id}:role/gateway-*-control-plane-*",
+      "arn:aws:iam::${local.account_id}:role/gha-control-plane-*",
     ]
   }
   statement {
@@ -166,6 +169,16 @@ data "aws_iam_policy_document" "control_plane_infra_apply" {
       variable = "iam:AWSServiceName"
       values   = ["ecs.application-autoscaling.amazonaws.com"]
     }
+  }
+  # Learned live wiring AuthZ's own ci_identity into CI: this role
+  # never had a generic iam:Get*/List* grant (only the plan role did),
+  # fine while it only ever wrote roles directly, but ci_identity's own
+  # module.github_oidc also reads the account-wide OIDC provider via
+  # data source during apply now, not just plan.
+  statement {
+    sid       = "OidcProviderReadOnly"
+    actions   = ["iam:ListOpenIDConnectProviders", "iam:GetOpenIDConnectProvider"]
+    resources = ["*"]
   }
   statement {
     sid = "TerraformStateS3"
