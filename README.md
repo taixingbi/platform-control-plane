@@ -66,8 +66,11 @@ since it never runs an inference request itself.
 
 ## Portal
 
-Migrated from `bedrock-gateway-portal` (that repo is being retired
-once this one's deploy is live and verified -- not deleted yet).
+Migrated from `bedrock-gateway-portal` -- this repo's own deploy is
+live and verified (confirmed 2026-09-21: the running
+`gateway-dev-portal-service` task is built from this repo's own CI,
+not the old one's). `bedrock-gateway-portal` is archived on GitHub
+(can no longer deploy at all), not yet deleted.
 
 ```bash
 cd portal
@@ -95,9 +98,14 @@ as done.
 
 ## Infra
 
-Terraform (ECS service, ALB, ECR) for the backend, plus
-`portal_service`/`portal_cdn`/`cognito_idp` for the portal, are moving
-into this platform's Terraform layer as part of the same
-restructuring -- not applied yet. Until then, `deploy-dev` in
-`.github/workflows/ci.yml` is wired but will fail (no ECR repo/ECS
-service/role exists yet) -- expected, not a bug.
+Terraform (`infra/environments/dev`) for both deployables is applied
+and live: `portal_service`/`portal_cdn`/`cognito_idp` for the portal
+(ECS service, ALB, CloudFront, a real Cognito user pool -- no custom
+domain/ACM alias yet, still served on the default `*.cloudfront.net`
+hostname), and `backend_service` for the admin/onboarding API. Both
+`.github/workflows/ci.yml`'s `deploy-dev` jobs (portal and backend)
+deploy successfully on every push to main.
+
+This repo's own CI IAM roles (`ci_identity/`) are Terraform-managed
+too, self-applying via the same CI -- see that directory's own
+`main.tf` for the full role list.
