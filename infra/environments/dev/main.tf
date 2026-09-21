@@ -43,6 +43,25 @@ data "aws_subnets" "private" {
   }
 }
 
+# Live bug found and fixed 2026-09-21: portal_service's ALB was placed
+# in the private (NAT-only) subnets above -- fine for gateway-dev-alb
+# (reached only via API Gateway's VPC Link, an AWS-internal path), but
+# this ALB is internet-facing and CloudFront fetches it directly over
+# the real public internet, which needs an actual Internet Gateway
+# route. Confirmed live: NewConnectionCount/RequestCount at this ALB
+# sat at exactly 0 the whole time it was broken (~36 hours) -- not an
+# application bug, the connection never got past routing.
+data "aws_subnets" "public" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_lb.gateway.vpc_id]
+  }
+  filter {
+    name   = "tag:Name"
+    values = ["gateway-dev-public-*"]
+  }
+}
+
 module "ecr_portal" {
   source = "git::https://github.com/taixingbi/bedrock-runtime-gateway.git//infra/modules/ecr?ref=main"
 
@@ -58,6 +77,7 @@ module "portal_service" {
   aws_region         = var.aws_region
   vpc_id             = data.aws_lb.gateway.vpc_id
   private_subnet_ids = data.aws_subnets.private.ids
+  public_subnet_ids  = data.aws_subnets.public.ids
   # Real, already-live log group -- kept byte-for-byte identical to
   # what bedrock-runtime-gateway used. aws_cloudwatch_log_group's
   # name forces replacement if changed (loses log history), so this is

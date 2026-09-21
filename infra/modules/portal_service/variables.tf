@@ -17,7 +17,13 @@ variable "vpc_id" {
 }
 
 variable "private_subnet_ids" {
-  type = list(string)
+  description = "Where the ECS task itself runs -- no direct internet route, reachable only through the ALB."
+  type        = list(string)
+}
+
+variable "public_subnet_ids" {
+  description = "Where the ALB lives. This ALB is internet-facing (CloudFront fetches it directly over the real public internet, not through any AWS-internal path) -- it must sit in a subnet with a real Internet Gateway route, not a NAT-only private one. Live-verified 2026-09-21: the P0 hardening that moved every ALB in this platform to private subnets broke this one specifically (gateway-dev-alb's own ALB stayed reachable since API Gateway's VPC Link reaches it over an AWS-internal path that doesn't need a public route at all) -- CloudFront's NewConnectionCount/RequestCount at the ALB sat at exactly 0 for the ~36 hours this was broken, confirming connections never got past the missing route, not an application bug."
+  type        = list(string)
 }
 
 variable "image" {
