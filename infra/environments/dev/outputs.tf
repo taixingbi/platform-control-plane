@@ -17,3 +17,12 @@ output "portal_cdn_domain_name" {
   description = "CloudFront distribution domain -- should match local.portal_base_url exactly; if it doesn't, the distribution was recreated and portal_base_url needs updating."
   value       = module.portal_cdn.domain_name
 }
+
+output "backend_alb_listener_arn" {
+  description = "What platform-edge-gateway's new /v1/admin/{proxy+} route's integration_uri points at (Phase 4 cutover)."
+  value       = module.backend_service.alb_listener_arn
+}
+
+output "backend_alb_dns_name" {
+  value = module.backend_service.alb_dns_name
+}

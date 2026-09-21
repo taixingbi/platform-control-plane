@@ -25,8 +25,11 @@ locals {
 # Deliberately loose coupling, same convention every other cross-repo
 # lookup in this platform already uses: name-based data source
 # lookups, not `terraform_remote_state`, not resource duplication.
-# bedrock-runtime-gateway keeps owning the VPC itself (until
-# platform-foundation exists); this repo only ever reads it.
+# platform-foundation now owns the VPC itself (Phase 3, 2026-09-21);
+# this repo only ever reads it -- still by ALB name here rather than a
+# platform-foundation data source, since that's what's already live
+# and correct, not worth churning just to reference the new owner
+# directly.
 
 data "aws_lb" "gateway" {
   name = "gateway-dev-alb"
@@ -59,6 +62,143 @@ data "aws_subnets" "public" {
   filter {
     name   = "tag:Name"
     values = ["gateway-dev-public-*"]
+  }
+}
+
+# --- Cross-repo lookups for the control-plane backend (Phase 4,
+# 2026-09-21 -- "direct cutover" of admin/onboarding from
+# bedrock-runtime-gateway/app to this repo's own backend/). Same
+# loose-coupling convention as everything else in this file. --------
+
+data "aws_security_group" "api_gateway_vpc_link" {
+  name = "gateway-dev-api-gw-vpc-link"
+}
+
+data "aws_sns_topic" "ops_alerts" {
+  name = "gateway-dev-ops-alerts"
+}
+
+data "aws_lb" "authz_service" {
+  name = "gateway-dev-authz-alb"
+}
+
+data "aws_dynamodb_table" "usage" {
+  name = "gateway-dev-usage"
+}
+
+data "aws_dynamodb_table" "onboarding_requests" {
+  name = "gateway-dev-onboarding-requests"
+}
+
+data "aws_dynamodb_table" "onboarding_audit" {
+  name = "gateway-dev-onboarding-audit"
+}
+
+data "aws_dynamodb_table" "provisioned_tenant_policies" {
+  name = "gateway-dev-provisioned-tenant-policies"
+}
+
+data "aws_dynamodb_table" "provisioned_principal_mappings" {
+  name = "gateway-dev-provisioned-principal-mappings"
+}
+
+data "aws_dynamodb_table" "policy_change_requests" {
+  name = "gateway-dev-policy-change-requests"
+}
+
+data "aws_dynamodb_table" "provisioned_tenant_policies_history" {
+  name = "gateway-dev-provisioned-tenant-policies-history"
+}
+
+module "ecr_control_plane" {
+  source = "git::https://github.com/taixingbi/bedrock-runtime-gateway.git//infra/modules/ecr?ref=main"
+
+  repository_name = "${local.name_prefix}-control-plane"
+  environment     = "dev"
+}
+
+module "backend_service" {
+  source = "../../modules/backend_service"
+
+  name_prefix                = "${local.name_prefix}-control-plane"
+  environment                = "dev"
+  aws_region                 = var.aws_region
+  vpc_id                     = data.aws_lb.gateway.vpc_id
+  private_subnet_ids         = data.aws_subnets.private.ids
+  vpc_link_security_group_id = data.aws_security_group.api_gateway_vpc_link.id
+  sns_topic_arn              = data.aws_sns_topic.ops_alerts.arn
+  log_group_name             = "/ai-platform/ecs/gateway-dev-control-plane"
+
+  # No image has been pushed on a first apply -- CI registers the real
+  # task definition revision on its first deploy, same as gateway-api/
+  # authz-service/portal.
+  image = "${module.ecr_control_plane.repository_url}:bootstrap"
+
+  usage_table_arn                               = data.aws_dynamodb_table.usage.arn
+  onboarding_requests_table_arn                 = data.aws_dynamodb_table.onboarding_requests.arn
+  onboarding_audit_table_arn                    = data.aws_dynamodb_table.onboarding_audit.arn
+  provisioned_tenant_policies_table_arn         = data.aws_dynamodb_table.provisioned_tenant_policies.arn
+  provisioned_principal_mappings_table_arn      = data.aws_dynamodb_table.provisioned_principal_mappings.arn
+  policy_change_requests_table_arn              = data.aws_dynamodb_table.policy_change_requests.arn
+  provisioned_tenant_policies_history_table_arn = data.aws_dynamodb_table.provisioned_tenant_policies_history.arn
+
+  container_env = {
+    AWS_REGION   = var.aws_region
+    SERVICE_NAME = "control-plane"
+    SERVICE      = "platform-control-plane"
+    ENVIRONMENT  = "dev"
+    LOG_LEVEL    = "INFO"
+
+    # Human auth (Cognito) -- same real values gateway-api's own
+    # container_env hardcodes (see bedrock-runtime-gateway/infra's own
+    # comment on why: no clean data-source lookup for a Cognito app
+    # client's id by name).
+    OIDC_JWKS_URL = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_HvCI4Nbr6/.well-known/jwks.json"
+    OIDC_ISSUER   = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_HvCI4Nbr6"
+    OIDC_AUDIENCE = "3g1ahkm9un6ccfno3e2jtt53j8"
+
+    IAM_TENANTS_PATH      = "policies/iam_tenants.yaml"
+    TENANT_POLICY_PATH    = "policies/tenants.yaml"
+    CERTIFIED_MODELS_PATH = "policies/certified_models.yaml"
+    ROUTE_SET_CONFIG_PATH = "policies/route_sets.yaml"
+
+    USAGE_TABLE_NAME                               = data.aws_dynamodb_table.usage.name
+    ONBOARDING_REQUESTS_TABLE_NAME                 = data.aws_dynamodb_table.onboarding_requests.name
+    ONBOARDING_AUDIT_TABLE_NAME                    = data.aws_dynamodb_table.onboarding_audit.name
+    PROVISIONED_TENANT_POLICIES_TABLE_NAME         = data.aws_dynamodb_table.provisioned_tenant_policies.name
+    PROVISIONED_PRINCIPAL_MAPPINGS_TABLE_NAME      = data.aws_dynamodb_table.provisioned_principal_mappings.name
+    POLICY_CHANGE_REQUESTS_TABLE_NAME              = data.aws_dynamodb_table.policy_change_requests.name
+    PROVISIONED_TENANT_POLICIES_HISTORY_TABLE_NAME = data.aws_dynamodb_table.provisioned_tenant_policies_history.name
+
+    # M12: delegates AWS_IAM principal mapping to platform-authz-service
+    # -- same real values bedrock-runtime-gateway's own container_env
+    # hardcodes (that repo's own comment explains why: the CA moved to
+    # platform-foundation, ACM PCA has no clean "look up by name" data
+    # source, and a root CA's self-signed cert doesn't change for its
+    # lifetime).
+    AUTHZ_SERVICE_URL = "https://${data.aws_lb.authz_service.dns_name}"
+    AUTHZ_CA_CERT_PEM = chomp(<<-EOT
+      -----BEGIN CERTIFICATE-----
+      MIIDKzCCAhOgAwIBAgIRAJI2amN73dXcl32YjkCVK5swDQYJKoZIhvcNAQELBQAw
+      LzEtMCsGA1UEAwwkQmVkcm9jayBHYXRld2F5IFBsYXRmb3JtIEludGVybmFsIENB
+      MB4XDTI2MDkxNzAxNDMyNVoXDTM2MDkxNzAyNDMyNVowLzEtMCsGA1UEAwwkQmVk
+      cm9jayBHYXRld2F5IFBsYXRmb3JtIEludGVybmFsIENBMIIBIjANBgkqhkiG9w0B
+      AQEFAAOCAQ8AMIIBCgKCAQEAop+Y1RxTXoOTZVrIgFurEINkEbE/E1/JQjHesTMX
+      2zuFmgQAJtmsLRHnEpJDPRSWjcbdZCVbhSsfNGt7gNXIw32pPTbPOx02BoHUVaFS
+      MbNaw6t0TRvsuWTCrJCTRIoS595xrUSz1jFuwIMgpzJH7C0u6OoMEI+YrU6WYOhX
+      pKsT5AQrVf7e6BaRX4IeyOZRK8A7ACq0NqrgVDv+gmq8ggnAWZyMBsSscozkOfZO
+      FK+fnsK2xdSiDvvoBOiN2wC3zx6ZyTqzN0zsAaqq9hQby3y2GD/FDyIq4MIYSsqR
+      YlhWJp5HL+BVnJ66sn9MqnKbNUEM3EI71DVX5wzGzvpCUwIDAQABo0IwQDAPBgNV
+      HRMBAf8EBTADAQH/MB0GA1UdDgQWBBREKqAldQXFXQVILzNgPFMgmKAHMDAOBgNV
+      HQ8BAf8EBAMCAYYwDQYJKoZIhvcNAQELBQADggEBAHnic2MRaOxmzBWU4/A1hYmq
+      tdipEjk2BXt3uOUOkbiPn3lYneZCcQIUfSrDP65d+3+5aTPV2oVGU93zc+YrUwjN
+      QSQWYP0QrXWBa2ZOAou354Jg5je1ydVRZi2QdnIuIEkHdbkY10zAy8b4ojc75tDE
+      vmJoVAJhXQnjiLl0NeR0rPY4cTdPKnZ+Wphb2cl8hEGzYr6s7TMQvbPjzB0HrnFX
+      OTDWYTh2wY7wKxcWzp1rlgul/jH1Kek4eBtG3u3F/2R8MBxYfI5XzOyoWayzXVd5
+      LrdHmzHQfP2eEv9GqS54Gqu3elV3dOdluK0rbmYfrUcVGOoFI3DFBFLD01agWe0=
+      -----END CERTIFICATE-----
+    EOT
+    )
   }
 }
 
