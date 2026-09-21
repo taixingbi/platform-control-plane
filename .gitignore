@@ -10,7 +10,7 @@ portal/node_modules/
 portal/.next/
 portal/tsconfig.tsbuildinfo
 
-# Terraform (infra/)
-infra/**/.terraform/
+# Terraform (infra/, ci_identity/, and any future root)
+.terraform/
 *.tfstate
 *.tfstate.*
