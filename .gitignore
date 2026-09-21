@@ -9,3 +9,8 @@ poetry.lock.bak
 portal/node_modules/
 portal/.next/
 portal/tsconfig.tsbuildinfo
+
+# Terraform (infra/)
+infra/**/.terraform/
+*.tfstate
+*.tfstate.*
