@@ -308,7 +308,7 @@ class HttpIamTenantResolverTests(unittest.TestCase):
         """authz-service's ALB cert is issued by a private CA no public
         trust store knows about -- ca_cert_pem pins verification to
         exactly that CA instead of relying on the system default (see
-        bedrock-gateway-infra's aws_acmpca_certificate_authority)."""
+        bedrock-runtime-gateway-infra's aws_acmpca_certificate_authority)."""
         import ssl
         from unittest.mock import patch
 

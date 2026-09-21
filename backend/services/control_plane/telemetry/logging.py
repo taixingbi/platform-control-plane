@@ -13,7 +13,7 @@ service's CloudWatch log group (or a future centralized Loki/ELK
 instance) can be filtered/grouped without needing to know which log
 group it came from. Same two fields, same position, in
 platform-authz-service's own copy of this module and in
-platform-api-gateway's access log format.
+platform-edge-gateway's access log format.
 
 `trace_id`/`span_id` are pulled automatically from whatever OTel span is
 current when the log call happens (telemetry/otel.py) -- omitted
@@ -23,14 +23,14 @@ telemetry/middleware.py from the inbound `x-session-id` header (empty
 when the caller didn't send one) -- unlike request_id, no session_id
 is invented when absent, since a made-up one wouldn't actually group
 anything. `api_gateway_request_id` comes from `api_gateway_request_id_ctx`,
-set from the inbound `X-Apigw-Request-Id` header -- platform-api-gateway
+set from the inbound `X-Apigw-Request-Id` header -- platform-edge-gateway
 maps its own `$context.requestId` onto this header explicitly (the bare
 name "apigw-requestid" is AWS-reserved, confirmed live: 400s any
 mapping operation at all, read or write), carrying the SAME value that
 repo's own access log calls `api_gateway_request_id` (renamed from the
 AWS default `requestId` for exactly this reason), so the two logs can
 be joined on it even though that access log can carry none of the other
-IDs here (see platform-api-gateway's own module comment -- API Gateway
+IDs here (see platform-edge-gateway's own module comment -- API Gateway
 access logs can't read arbitrary request headers at all). Absent
 entirely for calls that never went through API Gateway (e.g. local
 dev). All three are ContextVars rather than explicit log_event()

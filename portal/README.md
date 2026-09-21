@@ -1,6 +1,6 @@
 # bedrock-gateway-portal
 
-M10 self-service portal MVP for the [bedrock-gateway](../bedrock-gateway-app)
+M10 self-service portal MVP for the [bedrock-gateway](../bedrock-runtime-gateway-app)
 platform. Next.js (App Router) + TypeScript + Tailwind, calling the
 gateway's `/v1/admin/*` API server-side. No backend logic lives here --
 every page just renders what the gateway already computes.
@@ -58,7 +58,7 @@ not one flow doing both.
   `/logout` endpoint, so the Hosted UI's own browser session doesn't
   silently re-authenticate the same user on the next sign-in.
 - Admins are provisioned via Terraform (`aws_cognito_user` +
-  `aws_cognito_user_in_group` in `bedrock-gateway-infra`), not
+  `aws_cognito_user_in_group` in `bedrock-runtime-gateway-infra`), not
   self-service signup -- Cognito emails a temporary password, and the
   Hosted UI forces a change on first login.
 
@@ -70,10 +70,10 @@ npm install
 npm run dev
 ```
 
-`GATEWAY_API_URL` must be the gateway's open JWT route (bedrock-gateway-infra's
+`GATEWAY_API_URL` must be the gateway's open JWT route (bedrock-runtime-gateway-infra's
 `api_gateway_url` output), not the `/iam/*` SigV4 route. `COGNITO_DOMAIN`,
 `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `COGNITO_REGION`, and
-`PORTAL_BASE_URL` come from `bedrock-gateway-infra`'s `cognito_idp`
+`PORTAL_BASE_URL` come from `bedrock-runtime-gateway-infra`'s `cognito_idp`
 module outputs -- already wired as container env vars in
 `environments/dev/main.tf`.
 
@@ -87,7 +87,7 @@ module outputs -- already wired as container env vars in
   propose/approve/reject/rollback (quota/budget/models/guardrail
   policy) are all real, wired, working write paths, not policy-file +
   PR-review + redeploy. That's also the gap: this portal writes
-  straight to DynamoDB, entirely bypassing bedrock-gateway-policies'
+  straight to DynamoDB, entirely bypassing platform-policy-definitions'
   Git-reviewed files -- there are now two independent ways to change a
   tenant's live policy with no reconciliation between them. See
   `plan.md` section 35 in the platform root; the proposed direction is

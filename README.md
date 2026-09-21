@@ -5,7 +5,7 @@ administration, self-service onboarding, policy propose/approve/reject/
 rollback, and usage reporting -- plus the admin portal (Next.js) that
 drives it.
 
-Extracted from `bedrock-gateway-app`'s `admin_routes.py`/
+Extracted from `bedrock-runtime-gateway-app`'s `admin_routes.py`/
 `onboarding_routes.py` and `bedrock-gateway-portal`, which were
 independently deployed halves of the same feature with no shared
 versioning. This repo is a monorepo with **two separate deployables**
@@ -39,7 +39,7 @@ Same auth model as `bedrock-runtime-gateway`: JWT (Cognito-issued, or a
 local dev keypair when `OIDC_JWKS_URL` is unset) or AWS_IAM/SigV4
 (delegates identity resolution to `platform-authz-service` when
 `AUTHZ_SERVICE_URL` is set, same as the data plane). `policies/*.yaml`
-here are **copies** -- canonical source is `bedrock-gateway-policies`.
+here are **copies** -- canonical source is `platform-policy-definitions`.
 
 ### Why this is a *separate* service from bedrock-runtime-gateway
 
@@ -55,7 +55,7 @@ where *writes* happen. There's no shared-package tooling across this
 platform's repos, so the `TenantPolicy` dataclass and its DynamoDB
 (de)serialization are deliberately duplicated here rather than
 imported -- same tradeoff already made for `classification_rank`
-between `bedrock-gateway-app` and `platform-authz-service`.
+between `bedrock-runtime-gateway-app` and `platform-authz-service`.
 
 `pipeline.py`'s auth/RBAC functions (`authenticate`, `authorize`,
 `authorize_any`, `authorize_tenant_match`, `PipelineError`) are
@@ -77,7 +77,7 @@ npm run build   # or `npm run dev` for local development
 
 `GATEWAY_API_URL`'s route paths (`/v1/admin/*`) didn't change in this
 migration -- only which service answers them did (this repo's own
-`backend/`, not `bedrock-gateway-app` anymore); the portal's own code
+`backend/`, not `bedrock-runtime-gateway-app` anymore); the portal's own code
 needed zero route changes.
 
 Also upgraded Next.js 14.2.35 -> 16.3.5 as part of this migration --

@@ -3,7 +3,7 @@ section 33) -- runs before a change is accepted as PENDING_APPROVAL,
 so a proposer finds out immediately, not at approval time.
 
 Honesty about scope (plan section 33.2's point 4): this hand-keeps the
-same per-field constraints bedrock-gateway-policies/schemas/
+same per-field constraints platform-policy-definitions/schemas/
 tenants.schema.json already defines for the YAML path (rpm_limit >= 1,
 monthly_budget > 0, ...), rather than loading and validating against
 that schema file directly -- this repo has no dependency on it and no

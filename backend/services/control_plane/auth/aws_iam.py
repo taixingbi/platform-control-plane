@@ -300,7 +300,7 @@ class HttpIamTenantResolver:
 
     `ca_cert_pem`, when set, pins TLS verification to exactly that CA
     instead of the system trust store -- authz-service's ALB cert is
-    issued by a private CA (bedrock-gateway-infra's
+    issued by a private CA (bedrock-runtime-gateway-infra's
     aws_acmpca_certificate_authority.internal), which no public trust
     store knows about, so the default `ssl` behavior would reject it.
     Empty means "use the system default" (plain HTTP in dev/tests, or
