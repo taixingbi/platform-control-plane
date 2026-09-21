@@ -6,7 +6,8 @@ independently of tenant state control / usage reporting.
 """
 from __future__ import annotations
 
-import uuid
+import dataclasses
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Request
@@ -31,6 +32,7 @@ from ..onboarding.store import OnboardingStore
 from ..policy.store import PolicyStore, ProvisionedPolicyStore
 from ..telemetry.logging import get_logger, log_event
 from .errors import error_response as _error
+from .errors import request_id_of as _request_id_of
 from .schemas import OnboardingRequestBody, RejectOnboardingRequestBody
 
 _logger = get_logger("gateway.onboarding")
@@ -64,7 +66,7 @@ def build_onboarding_router(
 
     @api_router.post("/v1/admin/onboarding-requests")
     async def submit(body: OnboardingRequestBody, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate(request, required_role=settings.chat_required_role)
@@ -112,7 +114,7 @@ def build_onboarding_router(
 
     @api_router.get("/v1/admin/onboarding-requests")
     async def list_requests(request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             _authenticate(request, required_role=settings.admin_required_role)
@@ -123,7 +125,7 @@ def build_onboarding_router(
 
     @api_router.get("/v1/admin/onboarding-requests/{onboarding_request_id}")
     async def get_request(onboarding_request_id: str, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             _authenticate(request, required_role=settings.admin_required_role)
@@ -143,7 +145,7 @@ def build_onboarding_router(
 
     @api_router.post("/v1/admin/onboarding-requests/{onboarding_request_id}/approve")
     async def approve(onboarding_request_id: str, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate(request, required_role=settings.admin_required_role)
@@ -198,7 +200,7 @@ def build_onboarding_router(
 
     @api_router.post("/v1/admin/onboarding-requests/{onboarding_request_id}/reject")
     async def reject(onboarding_request_id: str, body: RejectOnboardingRequestBody, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate(request, required_role=settings.admin_required_role)
@@ -229,9 +231,6 @@ def build_onboarding_router(
 
 
 def _with_status(req: OnboardingRequest, status: OnboardingStatus, *, reason: "str | None" = None) -> OnboardingRequest:
-    import dataclasses
-    import time
-
     return dataclasses.replace(req, status=status, reason=reason, updated_at=time.time())
 
 

@@ -105,11 +105,3 @@ module outputs -- already wired as container env vars in
   proposed change). A `GET /me/capabilities`-style endpoint to drive
   what's *rendered* (never what's *enforced*) is a real UX gap, not
   built.
-- **npm audit** flags Next.js 14.2.35 (the latest 14.x patch release)
-  against a broad upstream advisory range; the specific reachable
-  issue is a build-time-only `postcss` dependency bundled inside
-  `next` itself, not something in the deployed request-handling path.
-  Clearing it fully means moving to Next 15 (async `cookies()`/
-  `headers()`, `useActionState` instead of `useFormState`) -- a real
-  but deliberately deferred follow-up, not done here to keep this an
-  MVP-sized change.

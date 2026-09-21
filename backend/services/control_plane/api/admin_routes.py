@@ -8,7 +8,8 @@ updates in later milestones) without touching the chat pipeline.
 """
 from __future__ import annotations
 
-import uuid
+import dataclasses
+import time
 from typing import Dict, Optional, Set
 
 from fastapi import APIRouter, Request
@@ -41,6 +42,7 @@ from ..routing_types import RouteSet
 from ..telemetry.logging import get_logger, log_event
 from ..usage.store import UsageStore, current_day, current_month, trailing_days
 from .errors import error_response as _error
+from .errors import request_id_of as _request_id_of
 from .schemas import (
     ProposePolicyChangeBody,
     RejectPolicyChangeBody,
@@ -49,6 +51,14 @@ from .schemas import (
 )
 
 _logger = get_logger("gateway.admin")
+
+
+def _scoped_tenant_ids(tenant_ids: list, identity, admin_required_role: str) -> list:
+    """Manager-tier callers see only their own tenant; admins see every
+    tenant_id in the list unfiltered (plan section 30.3)."""
+    if identity.has_role(admin_required_role):
+        return tenant_ids
+    return [t for t in tenant_ids if t == identity.tenant_id]
 
 
 def build_admin_router(
@@ -106,7 +116,7 @@ def build_admin_router(
 
     @api_router.put("/v1/admin/tenants/{tenant_id}/state")
     async def set_tenant_state(tenant_id: str, body: SetTenantStateBody, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
@@ -148,7 +158,7 @@ def build_admin_router(
         tenant's current-month spend against its monthly_budget (None ==
         unlimited, reported as null utilization rather than a divide by
         zero)."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
@@ -158,9 +168,7 @@ def build_admin_router(
         # A list endpoint has no single "resource tenant_id" to gate on
         # like set_tenant_state does -- a manager sees a filtered
         # result set instead of a 403 (plan section 30.3).
-        tenant_ids = policy_store.list_tenant_ids()
-        if not identity.has_role(settings.admin_required_role):
-            tenant_ids = [t for t in tenant_ids if t == identity.tenant_id]
+        tenant_ids = _scoped_tenant_ids(policy_store.list_tenant_ids(), identity, settings.admin_required_role)
 
         month = current_month()
         tenants = []
@@ -195,16 +203,14 @@ def build_admin_router(
         rather than flagged -- any nonzero spend on a brand-new tenant
         would otherwise trivially divide-by-zero into "infinite
         anomaly," which isn't a meaningful signal."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
         except pipeline.PipelineError as exc:
             return _error(exc.status_code, exc.code, str(exc), request_id)
 
-        tenant_ids = policy_store.list_tenant_ids()
-        if not identity.has_role(settings.admin_required_role):
-            tenant_ids = [t for t in tenant_ids if t == identity.tenant_id]
+        tenant_ids = _scoped_tenant_ids(policy_store.list_tenant_ids(), identity, settings.admin_required_role)
 
         today = current_day()
         window = trailing_days(7)
@@ -241,16 +247,14 @@ def build_admin_router(
         """M10 portal: full tenant policy listing (state, models,
         quota, budget, guardrail_policy, route_set) -- get_usage above
         only exposes spend/budget, this is the rest of TenantPolicy."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
         except pipeline.PipelineError as exc:
             return _error(exc.status_code, exc.code, str(exc), request_id)
 
-        tenant_ids = policy_store.list_tenant_ids()
-        if not identity.has_role(settings.admin_required_role):
-            tenant_ids = [t for t in tenant_ids if t == identity.tenant_id]
+        tenant_ids = _scoped_tenant_ids(policy_store.list_tenant_ids(), identity, settings.admin_required_role)
 
         tenants = []
         for tenant_id in tenant_ids:
@@ -276,7 +280,7 @@ def build_admin_router(
         status (M9) -- CertifiedRouter silently drops an uncertified
         fallback from routing at runtime, so surfacing that here is
         what lets an admin actually see why."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             _authenticate_admin(request)
@@ -307,7 +311,7 @@ def build_admin_router(
         in a validly-signed token is accepted, there's nothing to list
         -- so this is necessarily a partial picture, labeled as such
         rather than presented as a complete application inventory."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             _authenticate_admin(request)
@@ -339,7 +343,7 @@ def build_admin_router(
         Only reaches the *primary* (provisioned/DynamoDB) store: a
         file-managed tenant's policy changes still go through a YAML PR,
         same invariant onboarding/provisioning.py enforces for creation."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
@@ -381,7 +385,7 @@ def build_admin_router(
 
     @api_router.get("/v1/admin/tenants/{tenant_id}/policy-changes")
     async def list_policy_changes(tenant_id: str, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
@@ -400,7 +404,7 @@ def build_admin_router(
         """Admin-only, same role tier as onboarding's approve -- a
         manager may *propose* a change to their own tenant but never
         approve their own or anyone else's (separation of duties)."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin(request)
@@ -446,7 +450,7 @@ def build_admin_router(
     async def reject_policy_change(
         tenant_id: str, change_id: str, body: RejectPolicyChangeBody, request: Request
     ) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin(request)
@@ -480,7 +484,7 @@ def build_admin_router(
     async def rollback_policy(tenant_id: str, body: RollbackPolicyBody, request: Request) -> JSONResponse:
         """Admin-only: restores a prior policy version as a new forward
         epoch (plan section 33) -- never rewrites history in place."""
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin(request)
@@ -513,7 +517,7 @@ def build_admin_router(
 
     @api_router.get("/v1/admin/tenants/{tenant_id}/policy-history")
     async def get_policy_history(tenant_id: str, request: Request) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+        request_id = _request_id_of(request)
 
         try:
             identity = _authenticate_admin_or_manager(request)
@@ -556,9 +560,6 @@ def _with_change_status(
     approved_by: str,
     reason: "str | None" = None,
 ) -> PolicyChangeRequest:
-    import dataclasses
-    import time
-
     return dataclasses.replace(change, status=status, approved_by=approved_by, reason=reason, updated_at=time.time())
 
 
