@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -14,6 +18,60 @@ provider "aws" {
 
 locals {
   name_prefix = "gateway-dev"
+
+  # Plan section 35.5 -- the shared internal Private CA, owned by
+  # platform-foundation (Phase 3c, 2026-09-21). Same hardcode
+  # convention as bedrock-runtime-gateway's own environments/dev
+  # (ACM PCA has no clean "look up by name" data source, and this
+  # ARN is stable for the CA's lifetime).
+  private_ca_arn = "arn:aws:acm-pca:us-east-1:646821141010:certificate-authority/328ba585-7400-4565-bad3-6bfda5c0196d"
+}
+
+# --- mTLS client certificate for calling authz-service (plan section
+# 35, P1 production hardening) -- same pattern as
+# bedrock-runtime-gateway's own environments/dev, a separate cert
+# identifying this caller specifically. -------------------------------
+resource "tls_private_key" "authz_client" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "tls_cert_request" "authz_client" {
+  private_key_pem = tls_private_key.authz_client.private_key_pem
+
+  subject {
+    common_name = "control-plane-backend.internal"
+  }
+}
+
+resource "aws_acmpca_certificate" "authz_client" {
+  certificate_authority_arn   = local.private_ca_arn
+  certificate_signing_request = tls_cert_request.authz_client.cert_request_pem
+  signing_algorithm           = "SHA256WITHRSA"
+  template_arn                = "arn:aws:acm-pca:::template/EndEntityClientAuthCertificate/V1"
+
+  validity {
+    type  = "YEARS"
+    value = 1
+  }
+}
+
+resource "aws_secretsmanager_secret" "authz_client_cert" {
+  name = "${local.name_prefix}-control-plane-authz-client-cert"
+}
+
+resource "aws_secretsmanager_secret_version" "authz_client_cert" {
+  secret_id     = aws_secretsmanager_secret.authz_client_cert.id
+  secret_string = aws_acmpca_certificate.authz_client.certificate
+}
+
+resource "aws_secretsmanager_secret" "authz_client_key" {
+  name = "${local.name_prefix}-control-plane-authz-client-key"
+}
+
+resource "aws_secretsmanager_secret_version" "authz_client_key" {
+  secret_id     = aws_secretsmanager_secret.authz_client_key.id
+  secret_string = tls_private_key.authz_client.private_key_pem
 }
 
 # --- Cross-repo lookups (Phase 1 of the platform restructuring:
@@ -203,6 +261,15 @@ module "backend_service" {
       -----END CERTIFICATE-----
     EOT
     )
+  }
+
+  # mTLS cutover (plan section 35): this backend's own client cert/key
+  # for calling authz-service -- resolved from Secrets Manager at
+  # container start, same as gateway-api's own equivalent in
+  # bedrock-runtime-gateway's environments/dev.
+  container_secrets = {
+    AUTHZ_CLIENT_CERT_PEM = aws_secretsmanager_secret.authz_client_cert.arn
+    AUTHZ_CLIENT_KEY_PEM  = aws_secretsmanager_secret.authz_client_key.arn
   }
 }
 

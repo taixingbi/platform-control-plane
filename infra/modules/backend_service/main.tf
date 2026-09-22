@@ -149,6 +149,27 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Same reasoning as bedrock-runtime-gateway's own modules/ecs_service:
+# the execution role (not the task role) is what resolves
+# container_secrets at container start, scoped to exactly the ARNs
+# passed in.
+data "aws_iam_policy_document" "execution_secrets" {
+  count = length(var.container_secrets) > 0 ? 1 : 0
+
+  statement {
+    sid       = "ReadContainerSecrets"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = distinct([for arn in values(var.container_secrets) : join(":", slice(split(":", arn), 0, 7))])
+  }
+}
+
+resource "aws_iam_role_policy" "execution_secrets" {
+  count  = length(var.container_secrets) > 0 ? 1 : 0
+  name   = "${var.name_prefix}-execution-secrets-read"
+  role   = aws_iam_role.execution.id
+  policy = data.aws_iam_policy_document.execution_secrets[0].json
+}
+
 resource "aws_iam_role" "task" {
   name               = "${var.name_prefix}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -261,6 +282,9 @@ resource "aws_ecs_task_definition" "this" {
       ]
       environment = [
         for k, v in var.container_env : { name = k, value = v }
+      ]
+      secrets = [
+        for k, v in var.container_secrets : { name = k, valueFrom = v }
       ]
       logConfiguration = {
         logDriver = "awslogs"

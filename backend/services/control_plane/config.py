@@ -65,6 +65,13 @@ class Settings:
     authz_service_url: str
     authz_ca_cert_pem: str
 
+    # Plan section 35 (P1 hardening) -- this service's own mTLS client
+    # cert/key, presented to authz-service on every call once its ALB
+    # listener's mutual_authentication is flipped to "verify" (still
+    # "off" as of 2026-09-22, see HttpIamTenantResolver's own comment).
+    authz_client_cert_pem: str
+    authz_client_key_pem: str
+
 
 def load_settings() -> Settings:
     return Settings(
@@ -102,4 +109,6 @@ def load_settings() -> Settings:
         policy_change_requests_table_name=os.environ.get("POLICY_CHANGE_REQUESTS_TABLE_NAME", ""),
         authz_service_url=os.environ.get("AUTHZ_SERVICE_URL", ""),
         authz_ca_cert_pem=os.environ.get("AUTHZ_CA_CERT_PEM", ""),
+        authz_client_cert_pem=os.environ.get("AUTHZ_CLIENT_CERT_PEM", ""),
+        authz_client_key_pem=os.environ.get("AUTHZ_CLIENT_KEY_PEM", ""),
     )

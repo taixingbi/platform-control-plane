@@ -79,6 +79,17 @@ variable "container_env" {
   default = {}
 }
 
+# mTLS cutover (plan section 35): same reasoning as
+# bedrock-runtime-gateway's own modules/ecs_service.container_secrets --
+# resolved from Secrets Manager at container start, never persisted in
+# the task definition or CloudWatch Logs the way a plain container_env
+# value would be.
+variable "container_secrets" {
+  description = "Environment variables resolved from Secrets Manager at container start -- map of env var name to secret ARN."
+  type        = map(string)
+  default     = {}
+}
+
 # --- DynamoDB tables this service reads/writes -- all owned elsewhere
 # (bedrock-runtime-gateway), same "this service only reads/writes,
 # never owns the table's lifecycle" convention as authz-service's own
