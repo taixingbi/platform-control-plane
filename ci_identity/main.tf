@@ -71,6 +71,13 @@ data "aws_iam_policy_document" "control_plane_infra_plan" {
       # *ListTagsForResource*).
       "sns:GetTopicAttributes", "sns:ListTopics", "sns:ListTagsForResource",
       "dynamodb:Describe*", "dynamodb:ListTagsOfResource",
+      # mTLS client cert for calling authz-service (plan section 35):
+      # the private CA (data source) and the client cert issued from
+      # it, plus refreshing aws_secretsmanager_secret/secret_version
+      # state.
+      "acm-pca:Describe*", "acm-pca:Get*", "acm-pca:List*",
+      "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue",
+      "secretsmanager:ListSecretVersionIds", "secretsmanager:ListSecrets",
     ]
     resources = ["*"]
   }
@@ -139,6 +146,23 @@ data "aws_iam_policy_document" "control_plane_infra_apply" {
   statement {
     sid       = "DynamoDbReadOnly"
     actions   = ["dynamodb:Describe*", "dynamodb:ListTagsOfResource"]
+    resources = ["*"]
+  }
+  # mTLS client cert for calling authz-service (plan section 35):
+  # issuing this backend's own client cert from the platform's shared
+  # private CA (owned by platform-foundation, referenced here only by
+  # ARN -- never created/destroyed by this repo), and managing the two
+  # Secrets Manager secrets it's delivered through. Secret names don't
+  # exist until creation, same reasoning as every other broad grant
+  # above -- not scopable ahead of time.
+  statement {
+    sid       = "AcmPcaIssueOnly"
+    actions   = ["acm-pca:IssueCertificate", "acm-pca:GetCertificate", "acm-pca:Describe*", "acm-pca:Get*", "acm-pca:List*"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "SecretsManagerBroad"
+    actions   = ["secretsmanager:*"]
     resources = ["*"]
   }
   # IAM role names ARE predictable, scoped by name -- covers the
