@@ -99,7 +99,11 @@ data "aws_dynamodb_table" "provisioned_tenant_policies" {
 }
 
 data "aws_dynamodb_table" "provisioned_principal_mappings" {
-  name = "gateway-dev-provisioned-principal-mappings"
+  # Renamed 2026-09-22 from gateway-dev-provisioned-principal-mappings
+  # -- see bedrock-runtime-gateway/infra/environments/dev/main.tf's own
+  # comment on this table (the owning resource) for the migration
+  # details.
+  name = "gateway-principal-grants-dev"
 }
 
 data "aws_dynamodb_table" "policy_change_requests" {
