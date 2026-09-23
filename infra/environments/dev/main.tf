@@ -141,19 +141,32 @@ data "aws_lb" "authz_service" {
 }
 
 data "aws_dynamodb_table" "usage" {
-  name = "gateway-dev-usage"
+  # Renamed 2026-09-23 from gateway-dev-usage -- see
+  # bedrock-runtime-gateway/infra/environments/dev/main.tf's own comment
+  # on this table (the owning resource) for the migration details.
+  name = "gateway-usage-dev"
 }
 
 data "aws_dynamodb_table" "onboarding_requests" {
-  name = "gateway-dev-onboarding-requests"
+  # Renamed 2026-09-23 from gateway-dev-onboarding-requests -- see
+  # bedrock-runtime-gateway/infra/environments/dev/main.tf's own comment
+  # on this table (the owning resource) for the migration details.
+  name = "gateway-onboarding-requests-dev"
 }
 
 data "aws_dynamodb_table" "onboarding_audit" {
-  name = "gateway-dev-onboarding-audit"
+  # Renamed 2026-09-23 from gateway-dev-onboarding-audit -- see
+  # bedrock-runtime-gateway/infra/environments/dev/main.tf's own comment
+  # on this table (the owning resource) for the migration details.
+  name = "gateway-onboarding-audit-dev"
 }
 
 data "aws_dynamodb_table" "provisioned_tenant_policies" {
-  name = "gateway-dev-provisioned-tenant-policies"
+  # Renamed 2026-09-23 from gateway-dev-provisioned-tenant-policies to
+  # gateway-tenant-policies-dev -- see
+  # bedrock-runtime-gateway/infra/environments/dev/main.tf's own comment
+  # on this table (the owning resource) for the migration details.
+  name = "gateway-tenant-policies-dev"
 }
 
 data "aws_dynamodb_table" "provisioned_principal_mappings" {
@@ -165,11 +178,19 @@ data "aws_dynamodb_table" "provisioned_principal_mappings" {
 }
 
 data "aws_dynamodb_table" "policy_change_requests" {
-  name = "gateway-dev-policy-change-requests"
+  # Renamed 2026-09-23 from gateway-dev-policy-change-requests -- see
+  # bedrock-runtime-gateway/infra/environments/dev/main.tf's own comment
+  # on this table (the owning resource) for the migration details.
+  name = "gateway-policy-change-requests-dev"
 }
 
 data "aws_dynamodb_table" "provisioned_tenant_policies_history" {
-  name = "gateway-dev-provisioned-tenant-policies-history"
+  # Renamed 2026-09-23 from
+  # gateway-dev-provisioned-tenant-policies-history to
+  # gateway-tenant-policies-history-dev -- see
+  # bedrock-runtime-gateway/infra/environments/dev/main.tf's own comment
+  # on this table (the owning resource) for the migration details.
+  name = "gateway-tenant-policies-history-dev"
 }
 
 module "ecr_control_plane" {
