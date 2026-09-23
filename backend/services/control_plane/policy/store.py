@@ -196,6 +196,8 @@ def load_policies_from_yaml(path: str) -> InMemoryPolicyStore:
             max_concurrency=(
                 int(cfg["max_concurrency"]) if cfg.get("max_concurrency") is not None else None
             ),
+            queue_enabled=bool(cfg.get("queue_enabled", False)),
+            queue_max_wait_s=float(cfg.get("queue_max_wait_s", 5.0)),
             monthly_budget=(
                 float(cfg["monthly_budget"]) if cfg.get("monthly_budget") is not None else None
             ),
@@ -254,6 +256,10 @@ def _policy_to_item(policy: TenantPolicy) -> Dict[str, Any]:
         item["debug_capture_retention_days"] = policy.debug_capture_retention_days
     if policy.max_concurrency is not None:
         item["max_concurrency"] = policy.max_concurrency
+    if policy.queue_enabled:
+        item["queue_enabled"] = policy.queue_enabled
+    if policy.queue_max_wait_s != 5.0:
+        item["queue_max_wait_s"] = Decimal(str(policy.queue_max_wait_s))
     if policy.data_classification is not None:
         item["data_classification"] = policy.data_classification
     if policy.daily_budget is not None:
@@ -287,6 +293,10 @@ def _item_to_policy(item: Dict[str, Any]) -> TenantPolicy:
             int(item["debug_capture_retention_days"]) if "debug_capture_retention_days" in item else None
         ),
         max_concurrency=int(item["max_concurrency"]) if "max_concurrency" in item else None,
+        queue_enabled=bool(item.get("queue_enabled", False)),
+        queue_max_wait_s=(
+            float(item["queue_max_wait_s"]) if "queue_max_wait_s" in item else 5.0
+        ),
         monthly_budget=float(item["monthly_budget"]) if "monthly_budget" in item else None,
         data_classification=item.get("data_classification"),
         daily_budget=float(item["daily_budget"]) if "daily_budget" in item else None,
