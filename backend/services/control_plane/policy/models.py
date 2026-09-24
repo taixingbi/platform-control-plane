@@ -87,10 +87,19 @@ class TenantPolicy:
     daily_budget: Optional[float] = None
     application_budgets: Dict[str, float] = field(default_factory=dict)
     monthly_budget_soft_threshold_pct: Optional[float] = None
-    # Plan section 34.6: logged/reported only, not enforced -- see
-    # pipeline.admission_decision's docstring for why real priority
-    # preemption isn't built yet.
+    # Plan section 34.6: enforced as reserved-headroom (bedrock-runtime-
+    # gateway's ConcurrencyLimiter/DynamoDbConcurrencyLimiter), not
+    # true mid-flight preemption -- see that repo's TenantPolicy for
+    # the full note. Not enforced by anything in THIS repo; kept here
+    # only because control-plane edits the same policy object gateway-
+    # api reads.
     priority_class: str = "standard"
+    # Tokens-per-minute -- see bedrock-runtime-gateway's TenantPolicy
+    # for the full note (estimated pre-call, worst-case max_tokens
+    # reserved, never refunded). Not enforced by anything in THIS
+    # repo; kept here only because control-plane edits the same policy
+    # object gateway-api reads.
+    tpm_limit: Optional[int] = None
 
 
 class UnknownTenantError(Exception):
