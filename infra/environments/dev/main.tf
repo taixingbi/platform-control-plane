@@ -194,7 +194,7 @@ data "aws_dynamodb_table" "provisioned_tenant_policies_history" {
 }
 
 module "ecr_control_plane" {
-  source = "git::https://github.com/taixingbi/bedrock-runtime-gateway.git//infra/modules/ecr?ref=main"
+  source = "git::https://github.com/taixingbi/eval-bedrock-gateway.git//infra/modules/ecr?ref=main"
 
   repository_name = "${local.name_prefix}-control-plane"
   environment     = "dev"
@@ -295,7 +295,7 @@ module "backend_service" {
 }
 
 module "ecr_portal" {
-  source = "git::https://github.com/taixingbi/bedrock-runtime-gateway.git//infra/modules/ecr?ref=main"
+  source = "git::https://github.com/taixingbi/eval-bedrock-gateway.git//infra/modules/ecr?ref=main"
 
   repository_name = "${local.name_prefix}-portal"
   environment     = "dev"
